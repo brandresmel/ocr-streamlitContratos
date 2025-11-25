@@ -4,120 +4,100 @@ import numpy as np
 import cv2
 import easyocr
 import io
+import base64
 
-# --------------------- CONFIGURACIÓN DE PÁGINA ---------------------
-st.set_page_config(page_title="Conversor OCR", layout="centered", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Conversor OCR", layout="centered")
 
-# --------------------- ESTADO INICIAL ---------------------
-if "show_uploader" not in st.session_state:
-    st.session_state.show_uploader = False
-
+# -----------------------------------------------------------
+# ESTADO INICIAL
+# -----------------------------------------------------------
 if "uploaded_file" not in st.session_state:
     st.session_state.uploaded_file = None
 
-# --------------------- TÍTULO PRINCIPAL ---------------------
+
+# -----------------------------------------------------------
+# TÍTULO
+# -----------------------------------------------------------
 st.title("Conversor de Imagen a Texto")
 st.caption("Convierte imágenes en texto fácilmente (PNG/JPG).")
 
 
-# --------------------- FUNCIÓN PARA MOSTRAR BOTÓN INICIAL ---------------------
-def show_upload_button():
+# -----------------------------------------------------------
+# FUNCIÓN PARA ABRIR SELECTOR DE ARCHIVOS SIN MOSTRAR UPLOADER
+# -----------------------------------------------------------
+def custom_file_uploader():
+    uploaded_file = st.file_uploader(
+        "Selecciona una imagen",
+        type=["png", "jpg", "jpeg"],
+        label_visibility="collapsed"
+    )
+    return uploaded_file
+
+
+# -----------------------------------------------------------
+# BOTÓN INICIAL — abrir selector sin mostrar uploader visual
+# -----------------------------------------------------------
+if st.session_state.uploaded_file is None:
+
+    # botón que simula la carga sin mostrar uploader adelante
     if st.button("Carga o copia tu imagen"):
-        st.session_state.show_uploader = True
 
+        # mostramos uploader, pero oculto
+        st.session_state.show_hidden_uploader = True
 
-# --------------------- OCR SETUP ---------------------
-@st.cache_resource(show_spinner=False)
-def create_reader(langs):
-    # Versión compatible con todas las versiones de EasyOCR
-    return easyocr.Reader(langs, gpu=False)
+    # si debe mostrarse el uploader oculto:
+    if st.session_state.get("show_hidden_uploader", False):
 
+        uploaded = custom_file_uploader()
 
-def read_image_bytes(file) -> np.ndarray:
-    img = Image.open(io.BytesIO(file)).convert("RGB")
-    return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+        if uploaded:
+            st.session_state.uploaded_file = uploaded
+            st.session_state.show_hidden_uploader = False
+            st.experimental_rerun()
 
-
-# --------------------- PREPROCESAMIENTO MEJORADO ---------------------
-def preprocess(img):
-    # Escalar para mejorar nitidez
-    img = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-
-    # Pasar a gris
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # Quitar ruido
-    denoised = cv2.medianBlur(gray, 3)
-
-    # Mejorar contraste
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    enhanced = clahe.apply(denoised)
-
-    # Binarización estable
-    _, thresh = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-    return thresh
-
-
-def ocr_read(image_input, reader):
-    result = reader.readtext(image_input)
-    texts = [t[1] for t in result]
-    final = "\n".join(texts)
-    return final, result
-
-
-# --------------------- INTERFAZ PRINCIPAL ---------------------
-if not st.session_state.show_uploader:
-    show_upload_button()
-
-if st.session_state.show_uploader:
-    uploaded = st.file_uploader("", type=["png", "jpg", "jpeg"], label_visibility="collapsed")
-
-    if uploaded:
-        st.session_state.uploaded_file = uploaded
-        st.session_state.show_uploader = False
-
-
-# --------------------- PROCESO DEL OCR ---------------------
-uploaded = st.session_state.uploaded_file
-
-if uploaded:
-
+else:
+    # -----------------------------------------------------------
+    # PROCESAR IMAGEN SUBIDA
+    # -----------------------------------------------------------
+    uploaded = st.session_state.uploaded_file
     content = uploaded.read()
-    img = read_image_bytes(content)
 
-    st.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB),
-             caption="Imagen subida", use_column_width=True)
+    img = Image.open(io.BytesIO(content)).convert("RGB")
+    img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
 
-    # Idioma fijo: español
-    langs = ["es"]
-    reader = create_reader(langs)
+    st.image(img, caption="Imagen subida", use_column_width=True)
 
-    # Preprocesamiento siempre activo
-    img_proc = preprocess(img)
+    # -----------------------------------------------------------
+    # OCR
+    # -----------------------------------------------------------
+    @st.cache_resource(show_spinner=False)
+    def create_reader():
+        return easyocr.Reader(["es"], gpu=False)
 
-    with st.spinner("Leyendo texto..."):
-        text, raw = ocr_read(img_proc, reader)
+    reader = create_reader()
+
+    # Preprocesamiento ligero
+    gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+    gray = cv2.bilateralFilter(gray, 9, 75, 75)
+
+    st.write("Procesando OCR...")
+
+    text_result = reader.readtext(gray)
+    detected = "\n".join([t[1] for t in text_result])
 
     st.subheader("Texto detectado")
+    st.code(detected if detected.strip() else "No se detectó texto.")
 
-    if text.strip() == "":
-        st.info("No se detectó texto.")
-    else:
-        st.code(text)
+    # Descargar
+    st.download_button(
+        "Descargar texto",
+        detected.encode("utf-8"),
+        file_name=uploaded.name + "_ocr.txt"
+    )
 
-        # Descargar resultado
-        st.download_button(
-            "Descargar texto",
-            text.encode("utf-8"),
-            file_name=uploaded.name + "_ocr.txt"
-        )
-
-    # Botón reset
+    # -----------------------------------------------------------
+    # BOTÓN PARA REINICIAR
+    # -----------------------------------------------------------
     if st.button("Hagámoslo de nuevo"):
         st.session_state.clear()
         st.experimental_rerun()
-
-else:
-    if st.session_state.show_uploader:
-        st.info("Selecciona una imagen para comenzar.")
