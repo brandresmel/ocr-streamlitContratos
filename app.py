@@ -15,13 +15,12 @@ if "show_uploader" not in st.session_state:
 if "uploaded_file" not in st.session_state:
     st.session_state.uploaded_file = None
 
-
 # --------------------- TÍTULO PRINCIPAL ---------------------
 st.title("Conversor de Imagen a Texto")
 st.caption("Convierte imágenes en texto fácilmente (PNG/JPG).")
 
 
-# --------------------- FUNCIÓN PARA MOSTRAR UPLOADER ---------------------
+# --------------------- FUNCIÓN PARA MOSTRAR BOTÓN INICIAL ---------------------
 def show_upload_button():
     if st.button("Carga o copia tu imagen"):
         st.session_state.show_uploader = True
@@ -30,14 +29,8 @@ def show_upload_button():
 # --------------------- OCR SETUP ---------------------
 @st.cache_resource(show_spinner=False)
 def create_reader(langs):
-    return easyocr.Reader(
-        langs, 
-        gpu=False,
-        contrast_ths=0.05,
-        adjust_contrast=0.8,
-        text_threshold=0.3,
-        low_text=0.2
-    )
+    # Versión compatible con todas las versiones de EasyOCR
+    return easyocr.Reader(langs, gpu=False)
 
 
 def read_image_bytes(file) -> np.ndarray:
@@ -45,22 +38,22 @@ def read_image_bytes(file) -> np.ndarray:
     return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
 
 
-# --------------------- PREPROCESADO MEJORADO ---------------------
+# --------------------- PREPROCESAMIENTO MEJORADO ---------------------
 def preprocess(img):
-    # Escalar ×2 para aumentar nitidez del OCR
+    # Escalar para mejorar nitidez
     img = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
 
-    # Convertir a gris
+    # Pasar a gris
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # Filtro de mediana (mejor que bilateral para documentos)
+    # Quitar ruido
     denoised = cv2.medianBlur(gray, 3)
 
-    # Aumento de contraste (tipo documento)
+    # Mejorar contraste
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
     enhanced = clahe.apply(denoised)
 
-    # Binarización OTSU (mucho más estable para texto impreso)
+    # Binarización estable
     _, thresh = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
     return thresh
@@ -71,7 +64,6 @@ def ocr_read(image_input, reader):
     texts = [t[1] for t in result]
     final = "\n".join(texts)
     return final, result
-
 
 
 # --------------------- INTERFAZ PRINCIPAL ---------------------
@@ -86,19 +78,22 @@ if st.session_state.show_uploader:
         st.session_state.show_uploader = False
 
 
+# --------------------- PROCESO DEL OCR ---------------------
 uploaded = st.session_state.uploaded_file
 
-# --------------------- PROCESO DEL OCR ---------------------
 if uploaded:
+
     content = uploaded.read()
     img = read_image_bytes(content)
 
     st.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB),
              caption="Imagen subida", use_column_width=True)
 
+    # Idioma fijo: español
     langs = ["es"]
     reader = create_reader(langs)
 
+    # Preprocesamiento siempre activo
     img_proc = preprocess(img)
 
     with st.spinner("Leyendo texto..."):
@@ -111,10 +106,14 @@ if uploaded:
     else:
         st.code(text)
 
-        st.download_button("Descargar texto",
-                           text.encode("utf-8"),
-                           file_name=uploaded.name + "_ocr.txt")
+        # Descargar resultado
+        st.download_button(
+            "Descargar texto",
+            text.encode("utf-8"),
+            file_name=uploaded.name + "_ocr.txt"
+        )
 
+    # Botón reset
     if st.button("Hagámoslo de nuevo"):
         st.session_state.clear()
         st.experimental_rerun()
