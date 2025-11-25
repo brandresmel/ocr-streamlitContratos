@@ -30,7 +30,14 @@ def show_upload_button():
 # --------------------- OCR SETUP ---------------------
 @st.cache_resource(show_spinner=False)
 def create_reader(langs):
-    return easyocr.Reader(langs, gpu=False)
+    return easyocr.Reader(
+        langs, 
+        gpu=False,
+        contrast_ths=0.05,
+        adjust_contrast=0.8,
+        text_threshold=0.3,
+        low_text=0.2
+    )
 
 
 def read_image_bytes(file) -> np.ndarray:
@@ -38,12 +45,24 @@ def read_image_bytes(file) -> np.ndarray:
     return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
 
 
+# --------------------- PREPROCESADO MEJORADO ---------------------
 def preprocess(img):
+    # Escalar ×2 para aumentar nitidez del OCR
+    img = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+
+    # Convertir a gris
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    denoised = cv2.bilateralFilter(gray, d=9, sigmaColor=75, sigmaSpace=75)
-    thresh = cv2.adaptiveThreshold(denoised, 255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY, 31, 15)
+
+    # Filtro de mediana (mejor que bilateral para documentos)
+    denoised = cv2.medianBlur(gray, 3)
+
+    # Aumento de contraste (tipo documento)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(denoised)
+
+    # Binarización OTSU (mucho más estable para texto impreso)
+    _, thresh = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
     return thresh
 
 
@@ -54,23 +73,22 @@ def ocr_read(image_input, reader):
     return final, result
 
 
+
 # --------------------- INTERFAZ PRINCIPAL ---------------------
-# Mostrar botón inicial solo si aún no se mostró el uploader
 if not st.session_state.show_uploader:
     show_upload_button()
 
-# Cuando el botón fue presionado, mostrar uploader
 if st.session_state.show_uploader:
     uploaded = st.file_uploader("", type=["png", "jpg", "jpeg"], label_visibility="collapsed")
 
     if uploaded:
         st.session_state.uploaded_file = uploaded
-        st.session_state.show_uploader = False  # ocultar uploader después de subir
+        st.session_state.show_uploader = False
 
 
-# --------------------- PROCESO DEL OCR ---------------------
 uploaded = st.session_state.uploaded_file
 
+# --------------------- PROCESO DEL OCR ---------------------
 if uploaded:
     content = uploaded.read()
     img = read_image_bytes(content)
@@ -78,12 +96,9 @@ if uploaded:
     st.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB),
              caption="Imagen subida", use_column_width=True)
 
-    # Idiomas fijos (sin sidebar)
     langs = ["es"]
-
     reader = create_reader(langs)
 
-    # Preprocesar siempre (ya que quitamos la opción)
     img_proc = preprocess(img)
 
     with st.spinner("Leyendo texto..."):
@@ -100,7 +115,6 @@ if uploaded:
                            text.encode("utf-8"),
                            file_name=uploaded.name + "_ocr.txt")
 
-    # ---------------- BOTÓN HAGÁMOSLO DE NUEVO ----------------
     if st.button("Hagámoslo de nuevo"):
         st.session_state.clear()
         st.experimental_rerun()
